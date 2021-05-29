@@ -1,0 +1,269 @@
+---
+title: "Gun Violence in NYC - The most populous city in the US"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r include = FALSE}
+#Package Imports 
+library(tidyverse)
+library(lubridate)
+library(moderndive)
+library(knitr)
+
+nypd_data <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD") #Imports the nypd shooting incidents dataset into nypd_data
+```
+
+# Introduction
+
+The "NYPD Shooting Incidents Report" dataset presents a list of every shooting incident that occurred in New York City from 2006 to the end of 2020. 
+
+## Have Shootings Increased or Decreased Over Time?
+We'd like to get an idea whether the incidence of shootings increased or decreased with time. 
+
+```{r}
+# Tidy Data to Create Data Frame with Two Columns, $year, $incident_type 
+# where every row represents a shooting report. The $year represents the 
+# year of the incident, and $incident_type can be either "Non-Lethal", 
+# "Lethal" based on whether an statistical murder was recorded for that observation
+
+df <- nypd_data %>%
+  rename(incident_type = STATISTICAL_MURDER_FLAG) %>%
+  mutate(year=substr(OCCUR_DATE, 7,10)) %>%
+  select(year, incident_type) %>% 
+  mutate(incident_type= ifelse(incident_type == FALSE, "Non-Lethal", "Lethal")) 
+  
+ggplot(df, aes(x = year, fill = incident_type)) +
+  geom_bar(position = position_dodge(preserve= "single")) +
+  labs(title="Lethal and Non-Lethal Incidents from 2006 to 2020", fill = "Incident Type")
+```
+
+
+From the above graph we can see that from 2006 there was a steady decline in shootings but it experienced an spike increase last year in 2020. 
+
+## What Are The Demographics Of The Parties Involved?
+Having an idea of how gun violence has behaved over time, we'd like to explore the gender ratio for both groups, victims and perpetrators.
+
+```{r}
+# Tidy up the data to create a Data Frame with two columns, $gender and $incident_party 
+# where $gender is the individual's sex, and $incident_party specifies whether the 
+# current observation represents a victim or a perpetrator
+df <- rbind(
+  nypd_data %>% 
+    select(VIC_SEX) %>% 
+    rename(gender = VIC_SEX) %>%
+    mutate(incident_party = "victim")
+  , 
+  nypd_data %>% 
+    select(PERP_SEX) %>% 
+    rename(gender = PERP_SEX) %>%
+    mutate(incident_party = "perpetrator"))
+ 
+ggplot(df, aes(x = incident_party, fill = gender)) + 
+  geom_bar() + 
+  labs(x='Incident Party, left column are Perpetrators and Right Column are Victims')
+```
+
+```{r include = FALSE}
+#Compute the number victims
+total_victims <- df %>% filter(incident_party == 'victim') %>% summarize(n = n())
+
+#Compute the number female victims out of all shootings
+female_victims <- df %>% filter(incident_party == 'victim' & gender == 'F') %>% summarize(n = n())
+
+#Compute the number male victims out of all shootings
+male_victims <- df %>% filter(incident_party == 'victim' & gender == 'M') %>% summarize(n = n())
+```
+
+The above visualization shows that there is very low presence of female perpetrators, as well as female victims. So the vast majority individuals involved in shootings for both groups victims and perpetrators are male.  One might think that there would be a balanced distribution around victim's genders, but male victims account for `r (male_victims/total_victims) * 100 ` % of all cases. 
+
+Next we would like to get an idea of the rate of lethal incidents for both female and male victims. 
+
+```{r}
+# Compute the number of male deaths out of all incidents
+fatal_male_victims <- nypd_data %>%
+  filter(VIC_SEX == "M" & STATISTICAL_MURDER_FLAG == TRUE) %>% 
+  summarize(n = n())
+
+# Compute the number of female deaths out of all incidents
+fatal_female_victims <- nypd_data %>%
+  filter(VIC_SEX == "F" & STATISTICAL_MURDER_FLAG == TRUE) %>% 
+  summarize(n = n())
+
+# Compute the death rate among female victims
+ percent_of_fatal_female_victims <- (fatal_female_victims/female_victims) * 100
+
+# Compute the death rate among male victims
+ percent_of_fatal_male_victims <- (fatal_male_victims/male_victims) * 100
+```
+
+
+The above operations yield that out of all incidents. Deaths of male victims account for a `r percent_of_fatal_male_victims`%  and deaths of female victims for a  `r percent_of_fatal_female_victims`%. Here is a summary of the gender demographics around shooting victims.
+
+| Gender | Non-Lethal Victims | Lethal Victims | Death Rate  |
+| ------ | ------------------ | -------------- | ------------- |
+| Male   | `r male_victims`   | `r fatal_male_victims` | `r percent_of_fatal_male_victims`% |
+| Female   | `r female_victims`   | `r fatal_female_victims` | `r percent_of_fatal_female_victims`% |
+
+Here we can see that even though the number of male victims is much higher than female, the death rates per shooting incidents is about the same for both genders. 
+
+## What Are The Hours With The Most Shootings?
+
+Let's explore how the number of shootings behaves as a function of the hour of the day in which they occurred.
+
+```{r} 
+# Creates a Data Frame with two columns, the hour of the occurrence of the shooting
+# and the total count of recorded incidents within that hour
+df <- nypd_data %>%
+    count(OCCUR_TIME) %>%
+    rename(hour = OCCUR_TIME, total_incidents = n) %>%
+    mutate(hour = hour(hour))
+
+df <- aggregate(df$total_incidents, by=list(hour=df$hour), FUN=sum) %>% 
+    rename(total_incidents = x) 
+
+# Compute min and max number of shootings per hour 
+min_nbr_incidents <- min(df$total_incidents)
+max_nbr_incidents <- max(df$total_incidents)
+
+ggplot(df, aes(x = hour, y = total_incidents)) + 
+  geom_line(color = "black") + 
+  geom_hline(yintercept = max_nbr_incidents/2, linetype="dashed", color = "blue") +
+  labs(y = "Number of Reported Incidents", x = "Hour of Occurrence")
+```
+
+```{r include = FALSE}
+# Computes hour range with the less than half $max_nbr_incidents, and records
+# the hour range in a vector, then we use that same vector to calculate the range
+# for which the recorded shootings is greater or equal to half $max_nbr_incidents
+# recorded the hour ranges in a vector to interpolate them in the text and avoid 
+# hard coding the hours
+tmp <- df %>% filter(total_incidents < max_nbr_incidents/2)
+
+time_interval_low_violence <- c(min(tmp$hour), max(tmp$hour))
+time_interval_high_violence <- c(time_interval_low_violence[2]+1, time_interval_low_violence[1]-1)
+
+```
+
+
+The above graph shows the hours of the day in the X-axis and the count of reported shootings in the Y-axis. We can see that from [`r time_interval_low_violence[1]`:00:00 - `r time_interval_low_violence[2]`:00:00] the recorded shootings by hour are less than `r max_nbr_incidents/2`, while in the range of hours [`r time_interval_high_violence[1]`:00:00 - `r time_interval_high_violence[2]`:00:00] the number of shootings is greater than `r max_nbr_incidents/2`. 
+
+The dashed blue line cuts the graph to show the two hour ranges,below and above the blue line represent the hours with least and most reported shootings in NYC. 
+
+ 
+### Hour Ranges With Least And Most Shootings 
+
+| Less Than `r max_nbr_incidents/2` Incidents | More Than `r max_nbr_incidents/2` Incidents | Lowest Count of Incidents/Hour | Highest Count of Incidents/Hour |
+| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------- | ----------------------------------- |
+| [`r time_interval_low_violence[1]`:00:00 - `r time_interval_low_violence[2]`:00:00] | [`r time_interval_high_violence[1]`:00:00 - `r time_interval_high_violence[2]`:00:00] | `r min_nbr_incidents` | `r max_nbr_incidents` | 
+
+Now that we know the hour ranges with least and most recorded gun-shootings. We would like to analyze if the death rate for both intervals, and determine how the death rate behaves depending on the hour range in which shootings occurred. 
+ 
+### Victim Deaths By Hour 
+
+Let's plot the same graph as before, but this time let's add a *red line* to represent victim deaths recorded for that hour.
+
+```{r}
+# Here we create a new column to compute al the statistical murders recorded 
+# for a certain hour
+deadly_incidents_col <- nypd_data %>%
+    filter(STATISTICAL_MURDER_FLAG == TRUE) %>%
+    count(OCCUR_TIME) %>%
+    rename(hour = OCCUR_TIME, deaths = n) %>%
+    mutate(hour = hour(hour))
+
+# Here we add the $deadly_incidents_col to our data frame
+df$deaths = 
+    aggregate(
+      deadly_incidents_col$deaths,
+      by = list(hour=deadly_incidents_col$hour), 
+      FUN = sum
+      ) %>%
+    rename(deaths = x) %>%
+    select(deaths)
+
+df$deaths <- unlist(df$deaths) 
+
+
+ggplot() + 
+  geom_line(data=df, aes(x= hour, y=deaths, color="red")) +
+  geom_line(data=df, aes(x= hour, y=total_incidents)) +
+  scale_color_discrete(name="Line", labels= c("Deaths")) +
+  labs(x="Hour of Occurrence", y="Count")
+
+
+```
+
+We can see that the *red line* is much flatter than the *black line* **(Number of shooting incidents for that hour)**.
+## What Is The Death Rate By Hour?
+
+Let's explore how the death rate changes based on the hour of the day in which a shooting occurred. To calculate the death rate for each hour, we'll divide number of deaths by the number of shootings reported for that hour. 
+
+```{r}
+# Creates a new Data Frame with variable $hour, and $death_rate
+# where $death_rate equals the total number of deaths divided by total amount of 
+# shootings recorded within that hour 
+df <- df %>%
+  mutate(death_rate = deaths/total_incidents) %>%
+  select(hour, death_rate)
+
+ggplot(df, aes(x = hour, y = death_rate)) +
+  geom_col() + 
+  labs(y = "Death Rate", x = "Hour of Occurrence")
+```
+
+From the above plot we can see that even though from 5am to 5pm there tend to be less shootings than from 6PM to 4AM, the death rate in the former interval is generally higher.
+
+```{r} 
+# Compute the death rate for the hour range between 5AM and 5PM
+dth_rt_1 <- unlist(df %>% 
+    filter( hour > 4 & hour < 18) %>%
+    summarize(mean = mean(death_rate)))
+
+# Compute the death rate for the hour range between 6PM and 4AM
+dth_rt_2 <- unlist(df %>% 
+    filter( hour < 5 |  hour > 17) %>%
+    summarize(mean = mean(death_rate)))
+```
+
+
+| Death Rate Between 5AM and 5PM | Death Rate Between 6PM and 4AM |
+| ------------------------------ | ------------------------------ |
+| `r dth_rt_1 * 100`%            | `r dth_rt_2 * 100`%            |
+
+
+
+### Is There Any Relationship  Between The Death Rate And The Hour Of Occurrence?
+
+Now to finish our analysis we want to measure if there exists any relationship between time and death rate. In the following plot the x-axis shows the hours and the y-axis shows the death rate. 
+
+
+```{r}
+# Compute the correlation coefficient between hours of the day and the death rate
+cor <- df %>% 
+    get_correlation(formula = death_rate ~ hour )
+
+ggplot(df, aes(x = hour, y = death_rate)) + 
+    geom_point() + 
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(x= "Hour of Occurrence", y = "Death Rate")
+```
+
+As we can see the in the graph, the slope is negative but is not very steep. The correlation coefficient is `r cor` and since the value is so close to 0, we can say that there is no strong relationship of correlation between time of the day and the death rate.
+
+## Conclusion
+
+In this report we've seen that:
+
+- From 2006 to 2019 there was a steady decrease in the number of shooting incidents reported in NYC. But last year, 2020, there was an abrupt increase
+- Out of all shooting incidents, around 90% of the victims were Male
+- The death rate of these shooting incidents is about the same for both Male and Females accounting for `r percent_of_fatal_male_victims`% and `r percent_of_fatal_female_victims`% respectively
+- We found out that the time range with the most shooting incidents was from 6 PM to 4 AM inclusive, and that there are more than 997 shootings reported for each of the hours within that range
+- We found out that from 5 AM to 5 PM there is less incidence of shootings. With all the hours in this range having less than 997 shooting reports
+- We determined that although from [6PM to 4AM] there are more shootings, from [5AM to 5PM] The rate of statistical murders per incident increased
+- Finally we wanted showed that there is a slightly negative correlation between the hours of occurrence and the death rate of the shootings, with a value of `r cor`. So there is no strong relationship between these features
+
+### Bias
+One possible source of bias I was able to identify during my analysis was gender around the VIC_SEX variable. Since One could think that females are more 'vulnerable'. I tried to mitigate this bias, in my analysis by examining more in depth the genders of the victims and found out that female victims account for less than 10% of all shootings in in the last 14 years.
+
